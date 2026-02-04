@@ -1,0 +1,106 @@
+import streamlit as st
+import cv2
+import numpy as np
+import pandas as pd
+import pyttsx3
+import tempfile
+import uuid
+import os
+import base64
+from inference_sdk import InferenceHTTPClient
+
+# Initialize Roboflow Model
+ROBOFLOW_API_KEY = "2F2wBVDa9rs9n8mFR5rq"
+ROBOFLOW_MODEL_ID = "crop-detection-c2gnh/1"  # e.g., "myproject/1"
+
+model = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key="2F2wBVDa9rs9n8mFR5rq"
+)
+
+
+# Voice Engine
+engine = pyttsx3.init()
+
+# Speak out detections
+def speak_detections(predictions):
+    for pred in predictions:
+        label = pred["class"]
+        confidence = pred["confidence"]
+        engine.say(f"{label} detected with {int(confidence * 100)} percent confidence.")
+    engine.runAndWait()
+
+# Draw predictions on frame
+def annotate_frame(frame, predictions, threshold):
+    for pred in predictions:
+        if pred['confidence'] >= threshold:
+            x, y, w, h = pred['x'], pred['y'], pred['width'], pred['height']
+            class_name = pred['class']
+            x1, y1 = int(x - w / 2), int(y - h / 2)
+            x2, y2 = int(x + w / 2), int(y + h / 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, class_name, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    return frame
+
+# Inference wrapper
+def process_frame(frame, threshold):
+    _, img_encoded = cv2.imencode(".jpg", frame)
+    img_base64 = base64.b64encode(img_encoded).decode('utf-8')
+    result = model.infer(img_base64, model_id="crop-detection-c2gnh/1")
+    predictions = result['predictions']
+    frame = annotate_frame(frame, predictions, threshold)
+    df = pd.DataFrame(predictions)
+    speak_detections(predictions)
+    return frame, df
+
+# Streamlit App
+st.set_page_config(layout="wide")
+st.title("🌾 AI Crop Detection App")
+mode = st.sidebar.selectbox("Select Mode", ["Image", "Video", "Webcam"])
+threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.4, 0.05)
+
+if mode == "Image":
+    uploaded_img = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+    if uploaded_img:
+        file_bytes = np.asarray(bytearray(uploaded_img.read()), dtype=np.uint8)
+        image_np = cv2.imdecode(file_bytes, 1)
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_BGR2RGB)
+        annotated, df = process_frame(image_np, threshold)
+        st.image(annotated, caption="Annotated Image", use_column_width=True)
+        if not df.empty:
+            st.dataframe(df)
+
+elif mode == "Video":
+    uploaded_vid = st.file_uploader("Upload a video", type=["mp4", "avi", "mov"])
+    if uploaded_vid:
+        tfile = tempfile.NamedTemporaryFile(delete=False)
+        tfile.write(uploaded_vid.read())
+        cap = cv2.VideoCapture(tfile.name)
+        stframe = st.empty()
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            annotated, _ = process_frame(frame_rgb, threshold)
+            stframe.image(annotated, channels="RGB", use_column_width=True)
+        cap.release()
+
+elif mode == "Webcam":
+    st.warning("Click 'Start' to open webcam.")
+    run = st.button("Start")
+    stop = st.button("Stop")
+    cap = cv2.VideoCapture(0)
+    stframe = st.empty()
+
+    if run:
+        while True:
+            ret, frame = cap.read()
+            if not ret or stop:
+                break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            annotated, _ = process_frame(frame_rgb, threshold)
+            stframe.image(annotated, channels="RGB", use_column_width=True)
+    cap.release()
