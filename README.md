@@ -35,6 +35,3 @@ Weed identification
 Yield prediction
 Mobile & edge-device deployment
 
-👨‍💻 Author
-Nadir Siddiqui
-B.Tech (CSE)
